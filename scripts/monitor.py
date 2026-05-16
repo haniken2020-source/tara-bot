@@ -41,7 +41,7 @@ for dep, arr, label in ROUTES:
             "api_key":       serpapi,
         }
         try:
-            r    = httpx.get("https://serpapi.com/search.json", params=params, timeout=15)
+            r    = httpx.get("https://serpapi.com/search.json", params=params, timeout=50)
             data = r.json()
             best = data.get("best_flights", [])
             prices = [f.get("price", 0) for f in best if f.get("price")]
