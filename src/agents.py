@@ -67,7 +67,7 @@ class Agent:
             api_key=Config.openrouter_api_key,
             base_url="https://openrouter.ai/api/v1",
         )
-        self.model = "google/gemini-2.0-flash-exp:free"
+        self.model = "mistralai/mistral-7b-instruct:free"
         self.history = []
 
     def _with_date(self, user_message: str) -> str:
