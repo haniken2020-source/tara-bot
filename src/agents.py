@@ -1,6 +1,7 @@
 from __future__ import annotations
 from typing import Any, AsyncGenerator
 from datetime import date
+import json
 from openai import OpenAI
 from .config import Config
 from .tools.serpapi import search_flights, search_shopping
@@ -64,10 +65,10 @@ MAX_TOOL_ITERATIONS = 5
 class Agent:
     def __init__(self):
         self.client = OpenAI(
-            api_key=Config.openrouter_api_key,
-            base_url="https://openrouter.ai/api/v1",
+            api_key=Config.groq_api_key,
+            base_url="https://api.groq.com/openai/v1",
         )
-        self.model = "deepseek/deepseek-v4-flash:free"
+        self.model = "llama-3.3-70b-versatile"
         self.history = []
 
     def _with_date(self, user_message: str) -> str:
@@ -92,7 +93,6 @@ class Agent:
 
             if msg.tool_calls:
                 for tool_call in msg.tool_calls:
-                    import json
                     fn_name = tool_call.function.name
                     fn_args = json.loads(tool_call.function.arguments)
                     fn = TOOL_FUNCTIONS.get(fn_name)
