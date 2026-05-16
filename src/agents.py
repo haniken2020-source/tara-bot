@@ -67,7 +67,7 @@ class Agent:
             api_key=Config.openrouter_api_key,
             base_url="https://openrouter.ai/api/v1",
         )
-        self.model = "meta-llama/llama-3.3-70b-instruct:free"
+        self.model = "google/gemini-2.0-flash-exp:free"
         self.history = []
 
     def _with_date(self, user_message: str) -> str:
