@@ -1,8 +1,7 @@
 from __future__ import annotations
-import json
 from typing import Any, AsyncGenerator
 from datetime import date
-import google.generativeai as genai
+from openai import OpenAI
 from .config import Config
 from .tools.serpapi import search_flights, search_shopping
 
@@ -20,41 +19,40 @@ Mặc định cho câu hỏi mơ hồ về thời gian:
 - "cuối tuần" → thứ Sáu tuần gần nhất (không quá khứ)
 - "tuần sau" → tuần tiếp theo"""
 
-FLIGHT_TOOL = genai.protos.Tool(
-    function_declarations=[
-        genai.protos.FunctionDeclaration(
-            name="search_flights",
-            description="Tìm chuyến bay. Trả về giá, hãng, giờ bay.",
-            parameters=genai.protos.Schema(
-                type=genai.protos.Type.OBJECT,
-                properties={
-                    "departure_id": genai.protos.Schema(type=genai.protos.Type.STRING),
-                    "arrival_id":   genai.protos.Schema(type=genai.protos.Type.STRING),
-                    "outbound_date":genai.protos.Schema(type=genai.protos.Type.STRING),
-                    "return_date":  genai.protos.Schema(type=genai.protos.Type.STRING),
-                    "adults":       genai.protos.Schema(type=genai.protos.Type.INTEGER),
+TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "search_flights",
+            "description": "Tìm chuyến bay. Trả về giá, hãng, giờ bay.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "departure_id":  {"type": "string", "description": "Mã sân bay đi (IATA). Mặc định SGN"},
+                    "arrival_id":    {"type": "string", "description": "Mã sân bay đến (IATA)"},
+                    "outbound_date": {"type": "string", "description": "Ngày đi (YYYY-MM-DD)"},
+                    "return_date":   {"type": "string", "description": "Ngày về (YYYY-MM-DD)"},
+                    "adults":        {"type": "integer", "description": "Số người lớn. Mặc định 1"},
                 },
-                required=["arrival_id"],
-            ),
-        )
-    ]
-)
-
-SHOPPING_TOOL = genai.protos.Tool(
-    function_declarations=[
-        genai.protos.FunctionDeclaration(
-            name="search_shopping",
-            description="Tìm sản phẩm, so sánh giá.",
-            parameters=genai.protos.Schema(
-                type=genai.protos.Type.OBJECT,
-                properties={
-                    "query": genai.protos.Schema(type=genai.protos.Type.STRING),
+                "required": ["arrival_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_shopping",
+            "description": "Tìm sản phẩm, so sánh giá.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Tên sản phẩm cần tìm"},
                 },
-                required=["query"],
-            ),
-        )
-    ]
-)
+                "required": ["query"],
+            },
+        },
+    },
+]
 
 TOOL_FUNCTIONS = {
     "search_flights":  search_flights,
@@ -65,12 +63,11 @@ MAX_TOOL_ITERATIONS = 5
 
 class Agent:
     def __init__(self):
-        genai.configure(api_key=Config.gemini_api_key)
-        self.model = genai.GenerativeModel(
-            model_name="gemini-2.0-flash",
-            system_instruction=SYSTEM_PROMPT,
-            tools=[FLIGHT_TOOL, SHOPPING_TOOL],
+        self.client = OpenAI(
+            api_key=Config.openrouter_api_key,
+            base_url="https://openrouter.ai/api/v1",
         )
+        self.model = "meta-llama/llama-3.3-70b-instruct:free"
         self.history = []
 
     def _with_date(self, user_message: str) -> str:
@@ -78,12 +75,42 @@ class Agent:
         return f"[Hôm nay: {today}]\n{user_message}"
 
     def chat(self, user_message: str) -> str:
-        chat = self.model.start_chat(history=self.history)
         injected = self._with_date(user_message)
+        messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+        messages += self.history
+        messages.append({"role": "user", "content": injected})
 
         for _ in range(MAX_TOOL_ITERATIONS):
-            response = chat.send_message(injected if _ == 0 else "")
-            part = response.candidates[0].content.parts[0]
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                tools=TOOLS,
+                tool_choice="auto",
+            )
+            msg = response.choices[0].message
+            messages.append(msg)
 
-            if hasattr(part, "function_call") and part.function_call.name:
-                fn_name = part.function_call.name
+            if msg.tool_calls:
+                for tool_call in msg.tool_calls:
+                    import json
+                    fn_name = tool_call.function.name
+                    fn_args = json.loads(tool_call.function.arguments)
+                    fn = TOOL_FUNCTIONS.get(fn_name)
+                    result = fn(**fn_args) if fn else f"Unknown tool: {fn_name}"
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call.id,
+                        "content": str(result),
+                    })
+                continue
+
+            reply = msg.content or ""
+            self.history.append({"role": "user", "content": injected})
+            self.history.append({"role": "assistant", "content": reply})
+            return reply
+
+        return "Xin lỗi, em không thể xử lý yêu cầu này!"
+
+    async def stream_chat(self, user_message: str) -> AsyncGenerator[str, None]:
+        reply = self.chat(user_message)
+        yield reply
